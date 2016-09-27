@@ -10,6 +10,9 @@ import com.neovisionaries.ws.client.WebSocketException;
 import com.neovisionaries.ws.client.WebSocketExtension;
 import com.neovisionaries.ws.client.WebSocketFactory;
 
+import com.neovisionaries.ws.client.WebSocketFrame;
+import com.neovisionaries.ws.client.WebSocketState;
+
 import org.json.JSONException;
 import org.json.JSONObject;
 
@@ -18,6 +21,8 @@ import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.Queue;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import me.ibrohim.mushroom.TermLog;
 
@@ -36,13 +41,16 @@ public class WSClient {
     private TermLog log;
     Thread routine;
 
+    WebSocketFactory websocketFactory;
+
     public WSClient(Context ctx, TermLog _log) throws IOException {
         HWID = Settings.Secure.getString(ctx.getContentResolver(),Settings.Secure.ANDROID_ID);
         log = _log;
         messageQueue = new LinkedList<>();
 
-        WebSocketFactory websocketFactory = new WebSocketFactory();
+        websocketFactory = new WebSocketFactory();
         websocketFactory.setConnectionTimeout(TIMEOUT);
+
         webSocket = websocketFactory.createSocket(SERVER);
         webSocket.addExtension(WebSocketExtension.PERMESSAGE_DEFLATE);
         webSocket.addListener(new WebSocketAdapter() {
@@ -83,24 +91,36 @@ public class WSClient {
             }
 
             @Override
+            public void onDisconnected(WebSocket websocket,
+                                       WebSocketFrame serverCloseFrame, WebSocketFrame clientCloseFrame,
+                                       boolean closedByServer) throws Exception
+            {
+                log.Log(TermLog.LOG_INFO, "Disconnected from server.");
+                new Reconnect(5);
+            }
+
+
+            @Override
             public void onConnectError(WebSocket websocket, WebSocketException exception) throws Exception
             {
                 exception.printStackTrace();
                 log.Log(TermLog.LOG_ERROR, exception.getMessage());
-            }
-
-            @Override
-            public void onError(WebSocket websocket, WebSocketException cause) throws Exception
-            {
-                cause.printStackTrace();
-                log.Log(TermLog.LOG_ERROR, cause.getMessage());
+                new Reconnect(5);
             }
         });
     }
 
-    public void init(){
+    public void init() throws IOException {
+        if (webSocket.getState() == WebSocketState.CLOSED) {
+            webSocket = webSocket.recreate();
+        }
+
         log.Log(TermLog.LOG_INFO, "Connecting to server...");
         webSocket.connectAsynchronously();
+    }
+
+    public boolean isConnected(){
+        return webSocket.isOpen();
     }
 
     private class SMS {
@@ -110,6 +130,23 @@ public class WSClient {
 
         public String toString(){
             return "["+destination+"] "+body;
+        }
+    }
+
+    public class Reconnect extends TimerTask {
+
+        public Reconnect(int duration) {
+            log.Log(TermLog.LOG_INFO, "Reconnect to server in "+duration+"s.");
+            new Timer().schedule(this, duration*1000);
+        }
+
+        public void run(){
+            try {
+                init();
+            } catch (IOException e) {
+                e.printStackTrace();
+                log.Log(TermLog.LOG_ERROR, e.getMessage());
+            }
         }
     }
 
